@@ -1,0 +1,44 @@
+---
+- name: Install Java runtime
+  ansible.builtin.apt:
+    name: openjdk-17-jre-headless
+    state: present
+    update_cache: true
+  become: true
+
+- name: Create application directory
+  ansible.builtin.file:
+    path: "{{ app_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Copy application JAR
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../target/habit-tracker.jar"
+    dest: "{{ app_directory }}/{{ app_jar }}"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: Restart habit tracker
+
+- name: Install systemd service
+  ansible.builtin.template:
+    src: habit-tracker.service.j2
+    dest: /etc/systemd/system/habit-tracker.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: Restart habit tracker
+
+- name: Enable and start habit tracker
+  ansible.builtin.systemd:
+    name: habit-tracker
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true

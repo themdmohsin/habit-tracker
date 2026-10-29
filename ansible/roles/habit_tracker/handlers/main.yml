@@ -1,0 +1,7 @@
+---
+- name: Restart habit tracker
+  ansible.builtin.systemd:
+    name: habit-tracker
+    state: restarted
+    daemon_reload: true
+  become: true

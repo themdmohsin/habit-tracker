@@ -1,0 +1,55 @@
+# Deployment: keeps 3 identical pods running and handles rolling updates/rollbacks
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: habit-tracker
+  labels:
+    app: habit-tracker
+spec:
+  replicas: 3
+  # The selector must match the pod template labels below
+  selector:
+    matchLabels:
+      app: habit-tracker
+  template:
+    metadata:
+      labels:
+        app: habit-tracker
+    spec:
+      containers:
+        - name: habit-tracker
+          # Multi-stage image built locally; no registry needed on Docker Desktop
+          image: habit-tracker:2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          # PORT comes from the ConfigMap, not hard-coded in the pod spec
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: habit-tracker-config
+                  key: PORT
+          # Requests are used for scheduling, limits are the hard cap (JVM needs memory)
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # Readiness: pod only receives Service traffic once the app is healthy
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          # Liveness: container is restarted after 3 consecutive failures
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 10
+            failureThreshold: 3

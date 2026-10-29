@@ -1,0 +1,7 @@
+---
+- name: Configure Habit Tracker server
+  hosts: habit_tracker
+  become: true
+
+  roles:
+    - habit_tracker

@@ -1,0 +1,16 @@
+# Service: stable entry point that load-balances across the ready pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: habit-tracker-service
+spec:
+  # NodePort exposes the service on the node (localhost on Docker Desktop)
+  type: NodePort
+  # Must match the Deployment pod labels exactly
+  selector:
+    app: habit-tracker
+  ports:
+    - protocol: TCP
+      port: 80          # cluster-internal service port
+      targetPort: 8080  # container port
+      nodePort: 30080   # external port (8080-8082 are taken on this machine)

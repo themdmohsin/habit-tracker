@@ -1,0 +1,8 @@
+# ConfigMap: externalised configuration, injected into the pods as env vars
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: habit-tracker-config
+data:
+  # The app reads this as server.port=${PORT:8080}
+  PORT: "8080"
