@@ -23,3 +23,5 @@ Listens on port `8080` by default; override with the `PORT` env variable.
 - `GET /habits` - list habits
 - `POST /habits` with `{"name": "Read"}` - create a habit (201); blank name returns 400
 - `GET /actuator/health` - health check
+
+Jenkins automatic CI trigger verification.
