@@ -35,4 +35,10 @@ curl http://localhost:8080/actuator/health
 Custom port: set `PORT` env var (e.g. PowerShell: `$env:PORT=9090`).
 
 ## Progress log
-- Session 1: Created the Spring Boot app (pom, controller, record, properties), 3 tests, .gitignore, README.md and this file. Verified `mvn clean package` and ran the jar with curl checks. Git NOT initialised yet. Next: git init + push, then Jenkins pipeline.
+- Session 1: Created the Spring Boot app (pom, controller, record, properties), 3 tests, .gitignore, README.md and this file. Verified `mvn clean package` and ran the jar with curl checks. Git was not yet initialised at that point.
+- Session 2 (Git step DONE): `git init -b main`; no remote added and nothing pushed (user will add the remote and push). Branches: `main` and `feature/habit-api` (kept, not deleted). Commits:
+  - main: "Initial commit: project docs and gitignore" (.gitignore, README.md, CONTEXT.md)
+  - feature/habit-api: "Add Maven build configuration"; "Add habit REST API with in-memory storage"; "Add unit tests for habit endpoints"; "Update CONTEXT.md with Git progress"
+  - Merge strategy: `git merge --no-ff -m "Merge feature/habit-api into main"` so a visible merge commit exists on main.
+  - Verified `mvn clean package` on merged main: 3 tests pass. `target/` is gitignored.
+  - Next: add remote + push (user), then Jenkins CI pipeline (Jenkinsfile running `mvn clean package`).
