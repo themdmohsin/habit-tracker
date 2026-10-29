@@ -59,9 +59,7 @@ Custom port: set `PORT` env var (e.g. PowerShell: `$env:PORT=9090`).
 
 ## Remaining plan
 1. Manual: apply the manifests, scale demo, screenshots (see `k8s/README.md`)
-2. Report text
-3. `repo_link.txt`
-4. Resume lines
+2. Final screenshots into the report, check the items flagged in the Session 5 log entry
 ## Progress log
 - Session 1: Created the Spring Boot app (pom, controller, record, properties), 3 tests, .gitignore, README.md and this file. Verified `mvn clean package` and ran the jar with curl checks. Git was not yet initialised at that point.
 - Session 2 (Git step DONE): `git init -b main`; no remote added and nothing pushed (user will add the remote and push). Branches: `main` and `feature/habit-api` (kept, not deleted). Commits:
@@ -72,3 +70,4 @@ Custom port: set `PORT` env var (e.g. PowerShell: `$env:PORT=9090`).
   - Next: add remote + push (user), then Jenkins CI pipeline (Jenkinsfile running `mvn clean package`).
 - Session 3 (CI step DONE): branch `feature/ci-pipeline` (kept). Added Maven Wrapper 3.9.9, Jenkinsfile, GitHub Actions workflow, .gitattributes. Verified locally with `mvnw.cmd clean test` (3 tests pass) and `mvnw.cmd package -DskipTests` (jar built). Jenkins/GitHub Actions themselves not run here (YAML and Jenkinsfile reviewed by reading). Merged into main with `--no-ff`; nothing pushed. Next: user pushes, then manual Jenkins setup, Ansible, Docker, Kubernetes.
 - Session 4 (Docker + Kubernetes DONE): branch `feature/kubernetes` (kept). Committed the previously untracked single-stage Dockerfile and ansible/ first. Upgraded Dockerfile to multi-stage, added .dockerignore, built habit-tracker:2.0 and smoke tested on 8095. Added k8s/ manifests (dry-run validated only) and k8s/README.md. Merged into main with `--no-ff`; nothing pushed. Next: user applies manifests and takes screenshots, then report, repo_link.txt, resume lines.
+- Session 5 (Report DONE): branch `feature/report` (kept). Wrote report/component1.md, report/component2.md, report/resume.md and repo_link.txt from the actual files; no code, YAML or Jenkinsfile changed. Honest points stated: 1.0 and 2.0 images are the same size, scaling was manual (not autoscaling), habit data is per-pod in memory, readiness warnings during JVM startup are normal. Items to verify by hand: Ansible port 8090 (repo default is 8080, so it must have been overridden at run time), tool versions not recorded (Jenkins, Ansible, Docker Desktop, kubectl, Ubuntu), screenshot placeholders, figure descriptions match what was actually seen. Merged into main with `--no-ff`; nothing pushed.
