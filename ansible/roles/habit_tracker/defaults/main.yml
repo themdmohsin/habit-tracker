@@ -1,0 +1,5 @@
+---
+app_name: habit-tracker
+app_port: 8080
+app_directory: /opt/habit-tracker
+app_jar: habit-tracker.jar

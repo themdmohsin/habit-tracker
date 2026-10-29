@@ -1,0 +1,15 @@
+[Unit]
+Description=Habit Tracker Spring Boot Application
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{ app_directory }}
+Environment="SERVER_PORT={{ app_port }}"
+ExecStart=/usr/bin/java -jar {{ app_directory }}/{{ app_jar }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
