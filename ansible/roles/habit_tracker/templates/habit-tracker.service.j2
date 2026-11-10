@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory={{ app_directory }}
-Environment="SERVER_PORT={{ app_port }}"
-ExecStart=/usr/bin/java -jar {{ app_directory }}/{{ app_jar }}
+User={{ app_user }}
+WorkingDirectory={{ app_dir }}
+Environment=PORT={{ app_port }}
+ExecStart=/usr/bin/java -jar {{ app_dir }}/habit-tracker.jar
 Restart=on-failure
 RestartSec=5
 
