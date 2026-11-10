@@ -62,6 +62,14 @@ Custom port: set `PORT` env var (e.g. PowerShell: `$env:PORT=9090`).
 - `kubectl apply --dry-run=client -f k8s/` passed for all three. Not applied for real yet.
 - `k8s/README.md` lists the exact demo commands (apply, scale 5 and back to 3, describe, configmap, optional rollback demo).
 
+## Ansible
+- Runs in WSL Ubuntu against the local machine (`ansible_connection=local`, group `habit_tracker` in `ansible/inventory.ini`); passwordless sudo, systemd enabled. Run from `ansible/`: `ansible-playbook -i inventory.ini playbook.yml` (no `--ask-become-pass`).
+- Role `roles/habit_tracker` has the full galaxy layout (tasks, handlers, defaults, vars, meta, files, templates, tests, README.md; `.gitkeep` in empty `files/`).
+- Defaults: `app_name` habit-tracker, `app_port` 8090, `app_user` habit (system user, nologin, no home), `app_dir` /opt/habit-tracker, `jar_src` `{{ playbook_dir }}/../target/habit-tracker.jar`, `java_package` openjdk-17-jre-headless.
+- Systemd unit: `User=habit`, `Environment=PORT=8090`, `Restart=on-failure`. Handler `Restart habit-tracker` (restart + daemon_reload), notified by the jar copy and unit template tasks.
+- Playbook: pre_tasks load role defaults and fail with "Run mvnw.cmd clean package first" if the jar is missing; post_task polls `/actuator/health` via `uri` (retries 10, delay 5).
+- The jar must be built first with `mvnw.cmd clean package`.
+
 ## Remaining plan
 1. Manual: apply the manifests, scale demo, screenshots (see `k8s/README.md`)
 2. Final screenshots into the report, check the items flagged in the Session 5 log entry
@@ -77,3 +85,4 @@ Custom port: set `PORT` env var (e.g. PowerShell: `$env:PORT=9090`).
 - Session 4 (Docker + Kubernetes DONE): branch `feature/kubernetes` (kept). Committed the previously untracked single-stage Dockerfile and ansible/ first. Upgraded Dockerfile to multi-stage, added .dockerignore, built habit-tracker:2.0 and smoke tested on 8095. Added k8s/ manifests (dry-run validated only) and k8s/README.md. Merged into main with `--no-ff`; nothing pushed. Next: user applies manifests and takes screenshots, then report, repo_link.txt, resume lines.
 - Session 5 (Report DONE): branch `feature/report` (kept). Wrote report/component1.md, report/component2.md, report/resume.md and repo_link.txt from the actual files; no code, YAML or Jenkinsfile changed. Honest points stated: 1.0 and 2.0 images are the same size, scaling was manual (not autoscaling), habit data is per-pod in memory, readiness warnings during JVM startup are normal. Items to verify by hand: Ansible port 8090 (repo default is 8080, so it must have been overridden at run time), tool versions not recorded (Jenkins, Ansible, Docker Desktop, kubectl, Ubuntu), screenshot placeholders, figure descriptions match what was actually seen. Merged into main with `--no-ff`; nothing pushed.
 - Session 6 (UI + features): branch `feature/ui` (kept, not merged, not pushed). Habit now has category, createdAt, check-in dates; added check-in, delete, /info, static UI; k8s image 3.0 and sessionAffinity ClientIP. Pipeline files untouched. `mvnw.cmd clean package`: 10 tests pass; jar tested with Invoke-RestMethod/curl (create, check-in, list, delete 204/404, /info, / serves HTML, health UP). Docker build of 3.0 and 8095 smoke test NOT done: Docker daemon was not running; do it by hand: `docker build -t habit-tracker:3.0 .`.
+- Session 7 (Ansible cleanup): branch `feature/ansible-fix` (kept). Role rewritten (port 8090, user habit, renamed vars app_dir/jar_src/java_package, handler renamed `Restart habit-tracker`), playbook pre/post tasks, role skeleton completed, ansible/README.md added. `--syntax-check` passed in WSL; the real playbook was NOT run. Merged into main with `--no-ff`; nothing pushed.
