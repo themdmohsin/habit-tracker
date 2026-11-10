@@ -19,7 +19,7 @@ spec:
       containers:
         - name: habit-tracker
           # Multi-stage image built locally; no registry needed on Docker Desktop
-          image: habit-tracker:2.0
+          image: habit-tracker:3.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
