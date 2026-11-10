@@ -4,11 +4,13 @@ Repository: https://github.com/themdmohsin/habit-tracker.git
 
 ## Abstract
 
-This component takes the `habit-tracker.jar` produced in Component 1 and deploys it in three ways. Ansible configures a local Ubuntu machine (WSL) with Java and runs the application as a systemd service, idempotently. Docker packages the application as an image, upgraded from a single-stage to a multi-stage Dockerfile. Kubernetes (the Docker Desktop single-node cluster) runs three replicas of the image behind a NodePort Service, with configuration in a ConfigMap and liveness and readiness probes. A rollback demonstration shows Kubernetes recovering from a bad image tag. Scaling from 3 to 5 and back to 3 replicas was done manually with `kubectl scale`; there is no autoscaler.
+This component takes the `habit-tracker.jar` built in Component 1 and deploys the habit-tracker application in three ways. Ansible (role `habit_tracker`) configures a local WSL Ubuntu machine and runs the app as a systemd service on port 8090 under a service user called `habit`. Docker packages the app with a multi-stage Dockerfile (images `habit-tracker:1.0`, `2.0` and `3.0`). Kubernetes (the Docker Desktop built-in cluster) runs 3 replicas of `habit-tracker:3.0` behind a NodePort Service on port 30080 with `sessionAffinity: ClientIP`. The chosen enhancements are a ConfigMap, liveness and readiness probes, the multi-stage Dockerfile, and a rollback demo. Scaling from 3 to 5 and back to 3 was done manually with `kubectl scale`; there is no autoscaling. Habit data is held in memory in each pod, which is the main limitation.
 
 ## Introduction
 
-Component 1 ends with a tested JAR. This component covers getting that JAR running reliably: first on a server via configuration management (Ansible), then in a container (Docker), then in an orchestrated cluster (Kubernetes). Each step makes the deployment more repeatable than the one before.
+Component 1 ends with a tested JAR. This component covers running it: first on a server with configuration management (Ansible), then in a container (Docker), then in a cluster (Kubernetes). Each step is more repeatable than the one before.
+
+The application has a single-page UI at `/` and these endpoints: `GET/POST /habits`, `POST /habits/{id}/check-in`, `DELETE /habits/{id}`, `GET /info` and `GET /actuator/health`. The data is stored in memory inside each running process or pod.
 
 ## Implementation
 
@@ -17,22 +19,23 @@ Component 1 ends with a tested JAR. This component covers getting that JAR runni
 | Item | Value |
 |---|---|
 | Host OS | Windows, with PowerShell for `docker` and `kubectl` |
-| Ansible target | Local WSL Ubuntu machine (`ansible_connection=local`) |
-| Java on target | `openjdk-17-jre-headless` (installed by the role) |
+| Ansible target | Local WSL Ubuntu machine (`ansible_connection=local`) with passwordless sudo |
+| Java on the Ansible target | `openjdk-17-jre-headless` (installed by the role) |
 | Application | Spring Boot 3.3.5, Java 17 (see Component 1) |
-| Docker base images | `eclipse-temurin:17-jdk` (build), `eclipse-temurin:17-jre` (runtime) |
+| Docker base images | `eclipse-temurin:17-jdk` (build stage), `eclipse-temurin:17-jre` (runtime stage) |
+| Docker images | `habit-tracker:1.0`, `2.0`, `3.0` |
 | Kubernetes | Docker Desktop built-in single-node cluster |
-| Local ports in use | 8080 (another app), 8081 (Jenkins), 8082 (a test container) |
+| Ports in use on this machine | 8080 (another app), 8081 (Jenkins), 8082 (a test container), 8090 (Ansible service), 30080 (Kubernetes NodePort) |
 
-The Ansible, Docker Desktop, kubectl and Ubuntu versions were not recorded in the project files, so they are not stated here. Add them by hand if required.
+The versions of Ansible, Docker Desktop, kubectl and Ubuntu are not recorded in the repository, so they are not stated here.
 
 ### Code
 
 #### Part A: Ansible
 
-The `ansible/` folder contains `inventory.ini`, `playbook.yml` and a role `habit_tracker` (defaults, tasks, handlers, template, meta and tests).
+The `ansible/` folder contains `inventory.ini`, `playbook.yml` and the role `habit_tracker`, which has the full `ansible-galaxy` structure (`defaults`, `tasks`, `handlers`, `templates`, `files`, `vars`, `meta`, `tests`, `README.md`).
 
-**Inventory and playbook.**
+**Inventory and playbook (abbreviated).**
 
 ```ini
 [habit_tracker]
@@ -43,66 +46,61 @@ localhost ansible_connection=local
 - name: Configure Habit Tracker server
   hosts: habit_tracker
   become: true
+  pre_tasks: ...      # checks that the JAR exists
   roles:
     - habit_tracker
+  post_tasks: ...     # waits for /actuator/health to return 200
 ```
 
-The target is the local WSL Ubuntu machine, reached with `ansible_connection=local` (no SSH). `become: true` runs tasks with sudo.
+The target is the local WSL Ubuntu machine, reached with `ansible_connection=local`. Tasks run with sudo (`become: true`). Passwordless sudo is used because `sudo-rs` on the WSL machine failed with `--ask-become-pass`. The `pre_tasks` stop the run with a message ("Run mvnw.cmd clean package first") if `target/habit-tracker.jar` is missing, and the `post_tasks` poll `/actuator/health` (up to 10 retries, 5 seconds apart).
 
 **Role variables (`defaults/main.yml`).**
 
 ```yaml
 app_name: habit-tracker
-app_port: 8080
-app_directory: /opt/habit-tracker
-app_jar: habit-tracker.jar
+app_port: 8090
+app_user: habit
+app_dir: /opt/habit-tracker
+jar_src: "{{ playbook_dir }}/../target/habit-tracker.jar"
+java_package: openjdk-17-jre-headless
 ```
-
-The role default port is 8080. Because 8080 is taken on this machine by another application, the service was run on port 8090 (the value is overridable, since it is a role default).
 
 **Role tasks (`tasks/main.yml`, abbreviated).**
 
 ```yaml
-- name: Install Java runtime
-  ansible.builtin.apt:
-    name: openjdk-17-jre-headless
+- name: Create application system user
+  ansible.builtin.user:
+    name: "{{ app_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
     state: present
-    update_cache: true
-
-- name: Create application directory
-  ansible.builtin.file:
-    path: "{{ app_directory }}"
-    state: directory
-    mode: '0755'
 
 - name: Copy application JAR
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../target/habit-tracker.jar"
-    dest: "{{ app_directory }}/{{ app_jar }}"
+    src: "{{ jar_src }}"
+    dest: "{{ app_dir }}/habit-tracker.jar"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
     mode: '0644'
-  notify: Restart habit tracker
+  notify: Restart habit-tracker
 
-- name: Install systemd service
+- name: Install systemd unit
   ansible.builtin.template:
     src: habit-tracker.service.j2
-    dest: /etc/systemd/system/habit-tracker.service
+    dest: "/etc/systemd/system/{{ app_name }}.service"
     mode: '0644'
-  notify: Restart habit tracker
-
-- name: Enable and start habit tracker
-  ansible.builtin.systemd:
-    name: habit-tracker
-    enabled: true
-    state: started
-    daemon_reload: true
+  notify: Restart habit-tracker
 ```
+
+The role also installs the Java package, creates the application directory, and enables and starts the service.
 
 **Handler (`handlers/main.yml`).**
 
 ```yaml
-- name: Restart habit tracker
+- name: Restart habit-tracker
   ansible.builtin.systemd:
-    name: habit-tracker
+    name: "{{ app_name }}"
     state: restarted
     daemon_reload: true
 ```
@@ -110,15 +108,14 @@ The role default port is 8080. Because 8080 is taken on this machine by another 
 **Service template (`habit-tracker.service.j2`, key lines).**
 
 ```ini
-Environment="SERVER_PORT={{ app_port }}"
-ExecStart=/usr/bin/java -jar {{ app_directory }}/{{ app_jar }}
+User={{ app_user }}
+Environment=PORT={{ app_port }}
+ExecStart=/usr/bin/java -jar {{ app_dir }}/habit-tracker.jar
 Restart=on-failure
 RestartSec=5
 ```
 
-Explanation: the role installs Java, creates `/opt/habit-tracker`, copies the JAR built by Maven from `target/`, renders a systemd unit from a template, then enables and starts the service. Every task uses an Ansible module with a declared desired state (`present`, `directory`, `started`), which makes the role idempotent: running it a second time changes nothing. The JAR copy and the unit file both `notify` the handler, so the service is restarted only when one of them actually changes, not on every run. The unit passes the port as `SERVER_PORT` and restarts the app on failure after 5 seconds. The unit runs the service as `root` (`User=root`), which is simple but not best practice (see Conclusion).
-
-Passwordless sudo was configured for the Ansible user on the WSL machine. The system's `sudo-rs` did not work with `--ask-become-pass`, so a sudoers entry was used instead.
+Explanation: the role installs Java, creates the `habit` system user (no login shell, no home directory) and `/opt/habit-tracker`, copies the JAR, installs a systemd unit from a template, then enables and starts the service. The tasks use modules with a declared state (`present`, `directory`, `started`), so running the role a second time should change nothing. The JAR copy and the unit template both `notify` the handler `Restart habit-tracker`, so the service restarts only when one of them changes. The unit runs the app as the `habit` user, passes the port as `PORT` (which the app reads through `server.port=${PORT:8080}`), and restarts the app 5 seconds after a failure.
 
 #### Part B: Docker
 
@@ -145,9 +142,9 @@ EXPOSE 8080
 ENTRYPOINT ["java","-jar","/app/app.jar"]
 ```
 
-Explanation: the first stage uses a full JDK and builds the JAR inside Docker. The wrapper script and `pom.xml` are copied first and dependencies are downloaded in their own layer, so Docker reuses that layer when only the source code changes. The `sed` line removes Windows line endings from `mvnw` as a safeguard so it runs on Linux. The second stage starts from a JRE image, creates a non-root user `app`, copies only the finished JAR, and runs it as that user. A `.dockerignore` excludes `target/`, `.git/`, `.idea/`, `*.md`, `k8s/` and `ansible/` from the build context.
+Explanation: the first stage uses a full JDK and builds the JAR inside Docker, so no JDK or Maven is needed on the host. The wrapper and `pom.xml` are copied first and the dependencies are downloaded in their own layer, so Docker reuses that layer when only the source changes. The `sed` line removes Windows line endings from `mvnw` so it runs on Linux. The second stage starts from a JRE image, creates a non-root user `app`, copies only the finished JAR and runs it as that user. `.dockerignore` excludes `target/`, `.git/`, `.idea/`, `*.md`, `k8s/` and `ansible/` from the build context.
 
-The earlier single-stage version (tag `habit-tracker:1.0`) only copied a JAR built on the host into a JRE image. The multi-stage version is tagged `habit-tracker:2.0`.
+Image tags: `habit-tracker:1.0` is the earlier single-stage version (it copied a JAR built on the host), `2.0` is the first multi-stage version, and `3.0` is built from the same Dockerfile and contains the UI and the extra endpoints.
 
 #### Part C: Kubernetes
 
@@ -167,17 +164,10 @@ data:
 ```yaml
 spec:
   replicas: 3
-  selector:
-    matchLabels:
-      app: habit-tracker
-  template:
-    metadata:
-      labels:
-        app: habit-tracker
-    spec:
+  ...
       containers:
         - name: habit-tracker
-          image: habit-tracker:2.0
+          image: habit-tracker:3.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -187,19 +177,22 @@ spec:
                 configMapKeyRef:
                   name: habit-tracker-config
                   key: PORT
-          resources:
-            requests: { cpu: 200m, memory: 256Mi }
-            limits:   { cpu: 500m, memory: 512Mi }
           readinessProbe:
-            httpGet: { path: /actuator/health, port: 8080 }
+            httpGet:
+              path: /actuator/health
+              port: 8080
             initialDelaySeconds: 20
             periodSeconds: 5
           livenessProbe:
-            httpGet: { path: /actuator/health, port: 8080 }
+            httpGet:
+              path: /actuator/health
+              port: 8080
             initialDelaySeconds: 40
             periodSeconds: 10
             failureThreshold: 3
 ```
+
+The container also sets resource requests (200m CPU, 256Mi memory) and limits (500m CPU, 512Mi memory).
 
 **Service (`k8s/service.yaml`).**
 
@@ -217,95 +210,153 @@ spec:
       port: 80
       targetPort: 8080
       nodePort: 30080
+  sessionAffinity: ClientIP
 ```
 
-Explanation: the Deployment keeps three replicas running. The image is the local `habit-tracker:2.0`; `imagePullPolicy: IfNotPresent` lets Docker Desktop's cluster use the locally built image without a registry. The `PORT` environment variable is read from the ConfigMap rather than being hard-coded in the pod spec, and the application reads it through `server.port=${PORT:8080}`. Requests and limits give the scheduler resource figures and cap usage, with extra memory because the JVM needs it. The readiness probe keeps a pod out of the Service until `/actuator/health` answers; the liveness probe restarts the container after three consecutive failures. The Service selects pods by the `app: habit-tracker` label (identical to the Deployment's labels) and exposes them on node port 30080, because ports 8080 to 8082 are already used on this machine. Port 80 is the cluster-internal service port and 8080 is the container port.
+Explanation: the Deployment keeps three replicas running. The image is the local `habit-tracker:3.0`; `imagePullPolicy: IfNotPresent` lets the Docker Desktop cluster use a locally built image without a registry. `PORT` comes from the ConfigMap instead of being hard-coded in the pod spec. The readiness probe keeps a pod out of the Service until `/actuator/health` answers, and the liveness probe restarts the container after 3 consecutive failures. The Service selects pods by the label `app: habit-tracker` and exposes them on node port 30080 (ports 8080 to 8082 are already used on this machine). Port 80 is the Service port and 8080 is the container port.
+
+Because data is stored in memory in each pod, `sessionAffinity: ClientIP` is used as a workaround: it keeps one client talking to the same pod, so the UI looks consistent. It does not share data between pods. A shared database would be the real fix (see Limitations and Future Work).
 
 ### Description
 
-**Ansible flow:** run the playbook against the local WSL host; the role installs Java, deploys the JAR to `/opt/habit-tracker`, installs and starts the systemd service; the health endpoint confirms the app is up.
+**Ansible flow:** build the JAR with `mvnw.cmd clean package`, then run `ansible-playbook -i inventory.ini playbook.yml` from `ansible/` in WSL. The role installs Java, creates the user, deploys the JAR to `/opt/habit-tracker`, and installs and starts the systemd service. The playbook then checks `/actuator/health` on port 8090.
 
-**Docker flow:** `docker build -t habit-tracker:2.0 .` compiles inside the build stage and produces the runtime image. A smoke test ran the image on host port 8095 (`-p 8095:8080`); `/actuator/health` returned `{"status":"UP"}`, and the process inside ran as uid 999 (user `app`). The test container was then removed.
+**Docker flow:** `docker build -t habit-tracker:3.0 .` compiles the app inside the build stage and produces the runtime image.
 
-**Kubernetes flow:** apply the ConfigMap, Deployment and Service; three pods start; the Service sends traffic to ready pods; the app is reached at `http://localhost:30080`. The replica count was changed manually with `kubectl scale` from 3 to 5 and back to 3. The exact commands are in `k8s/README.md`.
+**Kubernetes flow:** apply the ConfigMap, Deployment and Service with `kubectl apply -f`. Three pods start, and the Service sends traffic only to ready pods. The app is reached at `http://localhost:30080`, and the footer of the UI shows which pod served the page (from `/info`). The replica count was changed manually with `kubectl scale` from 3 to 5 and back to 3. The exact commands are in `k8s/README.md`.
 
 ## Enhancement chosen and why
 
-**Multi-stage Dockerfile.** Chosen so the image can be built from source with only Docker installed, without a local JDK or Maven, and so the build is reproducible. It also caches the dependency download in its own layer, which speeds up rebuilds when only source code changes, and it runs the application as a non-root user. **It does not make the image smaller:** `habit-tracker:1.0` and `habit-tracker:2.0` are the same size (470MB disk usage, 130MB content size in `docker images`), because both use the same JRE base image and contain the same JAR.
+**Multi-stage Dockerfile.** Chosen so the image can be built from source with only Docker installed (no local JDK or Maven), with a cached dependency layer so rebuilds are faster when only the source changes, and with a non-root runtime user. **It does not make the image smaller:** `habit-tracker:1.0` and `habit-tracker:2.0` are the same size, because both use the same JRE base image and contain the same JAR.
 
-**ConfigMap.** Chosen to keep configuration (the port) outside the image and the pod template, so it can be changed without rebuilding the image. It is verified by `kubectl describe pod` showing `PORT` coming from the ConfigMap, and by `kubectl get configmap habit-tracker-config -o yaml`.
+**ConfigMap.** Chosen to keep configuration (the port) outside the image and the pod spec. The pods read `PORT` from the ConfigMap `habit-tracker-config` through `configMapKeyRef`.
 
-**Liveness and readiness probes.** Chosen so Kubernetes can tell whether the application is actually working. The readiness probe prevents traffic from reaching a pod that is still starting (a Spring Boot JVM takes several seconds), and the liveness probe restarts a container that stops responding.
+**Liveness and readiness probes.** Chosen so Kubernetes can tell whether the app is working. The readiness probe keeps a pod out of the Service until the app responds. The liveness probe restarts a container that stops responding. Readiness probe warnings in the pod events during startup are normal, because the app takes time to start.
 
-**Rollback demonstration.** Chosen to show a benefit of running under a Deployment: after setting the image to a nonexistent tag (`habit-tracker:broken`), the new pods fail with `ErrImagePull` / `ImagePullBackOff`, and `kubectl rollout undo deployment/habit-tracker` restores the previous working revision. During a rolling update, old pods are not removed until new pods are ready, so the application stays available while the bad rollout is stuck.
+**Rollback demo.** Chosen to show a benefit of a Deployment. After `kubectl set image deployment/habit-tracker habit-tracker=habit-tracker:broken`, the new pods fail with `ErrImagePull` / `ImagePullBackOff` while the old pods keep running. `kubectl rollout undo deployment/habit-tracker` then returns to the previous working revision.
 
 ## Results
 
-[Figure 1: First Ansible playbook run, showing tasks with `changed` status, proves the role installs Java, copies the JAR, installs the service and starts it on a fresh target.]
+### Ansible
 
-The first run changes the machine from its initial state to the desired state, so most tasks report `changed`.
+![Fig 11: First Ansible playbook run](figures/fig11.png)
 
-[Figure 2: Second Ansible playbook run with `changed=0`, proves the role is idempotent.]
+Fig 11: First Ansible playbook run showing tasks with `changed` status. It proves the role sets up the target from its initial state (Java, user, JAR, service).
 
-Running the same playbook again makes no changes, because the system already matches the declared state. The handler does not fire, so the service is not restarted needlessly.
+![Fig 12: Second Ansible playbook run](figures/fig12.png)
 
-[Figure 3: `systemctl status habit-tracker` and a `curl` of the health endpoint on the Ansible-configured port, proves the application runs as a systemd service and responds.]
+Fig 12: Second playbook run with `changed=0`. It proves the role is idempotent, and that the handler did not restart the service on the second run.
 
-The service is `active (running)` and the health endpoint returns `{"status":"UP"}`.
+![Fig 13: systemctl status and health check](figures/fig13.png)
 
-[Figure 4: The `ansible/` folder tree (inventory, playbook, role directories), proves the configuration is organised as a standard Ansible role.]
+Fig 13: `systemctl status habit-tracker` and a `curl` of the health endpoint on port 8090. It proves the app runs as a systemd service and answers on the Ansible-configured port.
 
-The layout follows the usual role structure: `defaults`, `tasks`, `handlers`, `templates`, `meta`, `tests`, `vars`.
+![Fig 14: Ansible folder tree](figures/fig14.png)
 
-[Figure 5: The multi-stage `Dockerfile` and the `docker build -t habit-tracker:2.0 .` output, proves the image is built from source in two stages.]
+Fig 14: The `ansible/` folder tree (inventory, playbook, role directories). It proves the configuration is organised as a standard Ansible role.
 
-The build output shows the build-stage steps (dependency download, package) followed by the runtime-stage copy.
+![Fig 15: Role defaults and handler](figures/fig15.png)
 
-[Figure 6: `docker images habit-tracker` listing `1.0` and `2.0`, proves both images exist and have the same size (470MB disk usage, 130MB content size).]
+Fig 15: Role `defaults/main.yml` (port 8090, user `habit`) and `handlers/main.yml` (`Restart habit-tracker`). It proves the role uses variables and a handler.
 
-The sizes are identical. The value of the multi-stage build lies in reproducibility, layer caching and the non-root user, not in size.
+![Fig 16: Systemd unit template](figures/fig16.png)
 
-[Figure 7: `kubectl get pods` and `kubectl get svc`, proves three replicas are running and the NodePort Service exists on 30080.]
+Fig 16: The systemd unit template or the installed unit file (`User=habit`, `Environment=PORT=8090`). It proves the service runs as the dedicated user on the configured port.
 
-All three pods reach `1/1 Running` once the readiness probe succeeds, and the Service shows `80:30080/TCP`.
+### Docker
 
-[Figure 8: Requests to `http://localhost:30080` (`POST /habits`, then `GET /habits`), proves the app is reachable from outside the cluster through the NodePort.]
+![Fig 17: Dockerfile](figures/fig17.png)
 
-The POST returns 201 with the new habit and the GET returns a JSON list.
+Fig 17: Output of `Get-Content Dockerfile`. It shows the two stages (`build` and `runtime`) and the non-root `USER app`.
 
-Because habit data is stored in memory inside each pod, and the Service load-balances across three pods, a GET can return a different list depending on which pod answers. For example, a habit created through one pod may not appear when another pod handles the next request. This is expected behaviour for an in-memory design. A shared database would solve it and is listed as future work.
+![Fig 18: docker build output](figures/fig18.png)
 
-[Figure 9: `kubectl get pods` after `kubectl scale deployment/habit-tracker --replicas=5`, showing 5/5 Running, proves the Deployment can be scaled up.]
+Fig 18: End of the output of `docker build -t habit-tracker:3.0 .`. It proves the image is built from source inside Docker.
 
-Scaling was done manually with `kubectl scale`. There is no autoscaler (no HorizontalPodAutoscaler) in this project.
+![Fig 19: docker images habit-tracker](figures/fig19.png)
 
-[Figure 10: `kubectl get pods` after scaling back to 3 replicas, proves the Deployment can be scaled down again.]
+Fig 19: `docker images habit-tracker`. It proves the images `1.0`, `2.0` and `3.0` exist, and that `1.0` and `2.0` have the same size, so the multi-stage build did not reduce the image size.
 
-The two extra pods are terminated and three remain, again by a manual `kubectl scale`.
+### Kubernetes
 
-[Figure 11: `kubectl describe pod` output showing the liveness and readiness probes and the `PORT` environment variable from the ConfigMap, proves the probes and ConfigMap are applied to the running pods.]
+![Fig 20: kubectl apply and pods starting](figures/fig20.png)
 
-The describe output lists the probe settings and shows `PORT` sourced from the `habit-tracker-config` ConfigMap. Readiness probe warnings may appear in the Events section (for example "Readiness probe failed" shortly after a pod starts). These happen during JVM startup, before the application is listening, and are normal; the pod becomes Ready once the application is up.
+Fig 20: `kubectl apply` of the ConfigMap, Deployment and Service, then `kubectl get pods` with pods in `ContainerCreating`. It proves the three manifests were applied and the pods started.
 
-[Figure 12: `kubectl get configmap habit-tracker-config -o yaml`, proves the ConfigMap exists in the cluster with `PORT: "8080"`.]
+![Fig 21: Pods and service](figures/fig21.png)
 
-This is the configuration source for the pods' `PORT` variable.
+Fig 21: `kubectl get pods` and `kubectl get svc`. It shows 3 pods `1/1 Running` and the Service on `80:30080/TCP`.
 
-[Figure 13: Rollback demo: pods in `ErrImagePull` / `ImagePullBackOff` after setting image `habit-tracker:broken`, then `kubectl rollout undo` and pods healthy again, proves Kubernetes can recover from a bad release.]
+![Fig 22: The UI in the browser](figures/fig22.png)
 
-The new pods fail to pull the nonexistent image while the older pods keep running. After `kubectl rollout undo deployment/habit-tracker`, the Deployment returns to the previous working revision and all pods are `Running`.
+Fig 22: The browser at `http://localhost:30080` with a habit added and "Done today" ticked; the footer shows the pod name. It proves the UI is reachable through the NodePort and shows which pod served it.
+
+![Fig 23: API calls through the NodePort](figures/fig23.png)
+
+Fig 23: `Invoke-RestMethod` POST to `/habits`, then `curl.exe` on `/habits` and `/info`. It proves the REST API and `/info` respond through the NodePort.
+
+![Fig 24: Service description](figures/fig24.png)
+
+Fig 24: `kubectl describe svc habit-tracker-service`. It shows Session Affinity `ClientIP` and 3 endpoints.
+
+![Fig 25: Scaling up to 5](figures/fig25.png)
+
+Fig 25: `kubectl scale deployment/habit-tracker --replicas=5`, then `kubectl get pods` with the new pods starting. It shows a manual scale-up; this is not autoscaling.
+
+![Fig 26: Five pods running](figures/fig26.png)
+
+Fig 26: `kubectl get pods` with 5 pods `1/1 Running`. It shows the manual scale-up completed.
+
+![Fig 27: Scaling back to 3](figures/fig27.png)
+
+Fig 27: `kubectl scale deployment/habit-tracker --replicas=3`, then `kubectl get pods` with pods in `Terminating`. It shows a manual scale-down back to 3.
+
+![Fig 28: Pod description, probes and environment](figures/fig28.png)
+
+Fig 28: `kubectl describe pod` showing the Liveness and Readiness probes and the `PORT` environment variable from the ConfigMap. It proves the probes and the ConfigMap are applied to the pods.
+
+![Fig 29: Pod events](figures/fig29.png)
+
+Fig 29: The Events section of `kubectl describe pod`. Readiness probe warnings during pod startup are normal, because the app takes time to start.
+
+![Fig 30: ConfigMap](figures/fig30.png)
+
+Fig 30: `kubectl get configmap habit-tracker-config -o yaml`. It proves the ConfigMap exists in the cluster with `PORT: "8080"`.
+
+![Fig 31: deployment.yaml](figures/fig31.png)
+
+Fig 31: `k8s/deployment.yaml` showing the probes and the `configMapKeyRef`. It shows how the probes and the ConfigMap are declared.
+
+![Fig 32: Rollback demo, broken image](figures/fig32.png)
+
+Fig 32: `kubectl set image` to `habit-tracker:broken`, then `kubectl get pods` showing `ImagePullBackOff` / `ErrImagePull`. The old pods are still running.
+
+![Fig 33: Rollback demo, undo](figures/fig33.png)
+
+Fig 33: `kubectl rollout undo`, `rollout status`, `get pods` and `rollout history`. It proves the Deployment returned to the previous working revision.
+
+### Git
+
+![Fig 34: Git history graph](figures/fig34.png)
+
+Fig 34: `git log --graph --oneline --all --decorate`. It shows the branches and merges in the final repository, including the `feature/ui` pull request merge and `feature/ansible-fix`.
+
+![Fig 35: GitHub network graph](figures/fig35.png)
+
+Fig 35 (optional): GitHub Insights > Network. It shows the branch and merge history on GitHub.
 
 ## Conclusion
 
-The component shows the same application deployed three ways, each more automated than the last. Ansible gives an idempotent, repeatable server setup using a role, a template and a handler. Docker gives a reproducible multi-stage build with a non-root runtime user. Kubernetes adds replication, health checking, external configuration and rollback. The enhancements (multi-stage build, ConfigMap, probes, rollback demonstration) were each demonstrated.
+The same application was deployed three ways. Ansible gives a repeatable server setup using a role with variables, a template and a handler. Docker gives a reproducible multi-stage build with a non-root runtime user. Kubernetes adds replicas, health probes, ConfigMap configuration and rollback. The enhancements (multi-stage Dockerfile, ConfigMap, probes, rollback demo) were each demonstrated. The multi-stage build did not reduce the image size, and scaling was done by hand.
 
-Limitations and future work:
-- Habit data lives in memory per pod, so replicas do not share state. A shared database would fix this.
-- Scaling is manual. A HorizontalPodAutoscaler could automate it (not implemented).
-- The multi-stage image is not smaller than the single-stage image.
-- The Ansible-managed service runs as `root`; a dedicated service user would be safer.
-- The Kubernetes cluster is a single-node Docker Desktop cluster using a local image, with no registry or Ingress.
-- The pipeline from Component 1 does not yet trigger the Ansible, Docker or Kubernetes steps; they are run manually.
+## Limitations and Future Work
+
+- **In-memory data.** Habit data is stored in memory in each pod, so pods do not share data and the data is lost when a pod restarts. `sessionAffinity: ClientIP` is only a workaround that keeps one client on the same pod.
+- **Shared database.** Adding a shared database is future work and the proper fix for the point above. There is none in this project.
+- **Autoscaling.** Scaling was manual (`kubectl scale`, 3 to 5 to 3). No autoscaler is configured; adding one is future work.
+- **Failing-build demo.** Only successful pipeline runs were shown. A deliberately failing test, to show the pipeline stopping at the Test stage, is future work.
+- Jenkins uses polling every minute, not a webhook. The pipeline does not trigger the Ansible, Docker or Kubernetes steps; they are run manually.
+- The cluster is a single-node Docker Desktop cluster using a local image, with no registry.
 
 ## References
 
@@ -318,5 +369,4 @@ Limitations and future work:
 7. Kubernetes: Services. https://kubernetes.io/docs/concepts/services-networking/service/
 8. Kubernetes: ConfigMaps. https://kubernetes.io/docs/concepts/configuration/configmap/
 9. Kubernetes: Liveness, Readiness and Startup Probes. https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
-10. Kubernetes: Resource Management for Pods and Containers. https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
-11. Spring Boot Actuator. https://docs.spring.io/spring-boot/reference/actuator/index.html
+10. Spring Boot Actuator. https://docs.spring.io/spring-boot/reference/actuator/index.html
