@@ -3,5 +3,32 @@
   hosts: habit_tracker
   become: true
 
+  pre_tasks:
+    - name: Load role defaults (needed before the role runs)
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/roles/habit_tracker/defaults/main.yml"
+
+    - name: Check that the application JAR exists
+      ansible.builtin.stat:
+        path: "{{ jar_src }}"
+      delegate_to: localhost
+      become: false
+      register: jar_stat
+
+    - name: Fail if the JAR is missing
+      ansible.builtin.fail:
+        msg: "JAR not found at {{ jar_src }}. Run mvnw.cmd clean package first."
+      when: not jar_stat.stat.exists
+
   roles:
     - habit_tracker
+
+  post_tasks:
+    - name: Wait for the health endpoint to return 200
+      ansible.builtin.uri:
+        url: "http://localhost:{{ app_port }}/actuator/health"
+        status_code: 200
+      register: health
+      until: health.status == 200
+      retries: 10
+      delay: 5
