@@ -1,7 +1,7 @@
 # CONTEXT.md - project memory between AI sessions
 
 ## Project goal
-Course assignment on CI/CD. The app is a throwaway; only the pipeline matters, so keep the app minimal (no UI, DB, auth, or extra features).
+Course assignment on CI/CD. The app is a throwaway; only the pipeline matters, so keep the app minimal (no DB, auth, or frontend framework). Since Session 6 a single-file UI and a few extra endpoints were added at the teacher's request.
 
 Pipeline: code -> Git -> Jenkins CI -> Ansible -> Docker -> Kubernetes
 
@@ -16,12 +16,17 @@ Pipeline: code -> Git -> Jenkins CI -> Ansible -> Docker -> Kubernetes
 - `<finalName>habit-tracker</finalName>` so the artifact is always `target/habit-tracker.jar`
 - `server.port=${PORT:8080}`; only the `health` actuator endpoint is exposed (`/actuator/health`)
 - Blank-name validation done manually in the controller (returns 400), no validation starter
-- Exactly 3 JUnit 5 tests (MockMvc `@WebMvcTest`): empty list, POST creates, blank name -> 400
+- 10 JUnit 5 tests (MockMvc `@WebMvcTest`): original 3 + check-in, idempotent check-in, delete 204/404, check-in 404, default category, /info, streak logic (static `HabitController.streak(Set, today)`)
 - Local env: Windows, JDK 17 (Temurin), Maven 3.10.0
 
 ## Endpoints
 - `GET /habits` -> 200, JSON list
-- `POST /habits` body `{"name":"..."}` -> 201 with `{id, name}`; blank -> 400
+- `POST /habits` body `{"name":"...","category":"..."}` (category optional, default "General") -> 201; blank name -> 400
+- Habit responses: `{id, name, category, createdAt, doneToday, streak, totalCheckIns}`
+- `POST /habits/{id}/check-in` -> 200 updated habit (idempotent per day); 404 unknown
+- `DELETE /habits/{id}` -> 204; 404 unknown
+- `GET /info` -> `{"pod":"<HOSTNAME>","version":"3.0"}`
+- `GET /` -> UI (`src/main/resources/static/index.html`)
 - `GET /actuator/health`
 
 ## Build / run commands
@@ -46,13 +51,13 @@ Custom port: set `PORT` env var (e.g. PowerShell: `$env:PORT=9090`).
 ## Docker
 - Multi-stage `Dockerfile` (chosen enhancement). Stage `build` (eclipse-temurin:17-jdk): copies mvnw, pom.xml, .mvn/ first, runs `sed -i 's/\r$//' mvnw` (CRLF safety) then `./mvnw -B -q dependency:go-offline` (cached layer), then copies src/ and runs `package -DskipTests`. Stage `runtime` (eclipse-temurin:17-jre): non-root user `app`, only the jar copied to `/app/app.jar`, `EXPOSE 8080`.
 - `.dockerignore`: target/, .git/, .idea/, *.md, k8s/, ansible/.
-- Tags: `habit-tracker:1.0` = old single-stage (copies prebuilt jar); `habit-tracker:2.0` = multi-stage. Both show 470MB disk / 130MB content in `docker images`: same JRE base, so the gain is a reproducible build without needing a local JDK/Maven, plus non-root user and layer caching, not image size.
+- Tags: `habit-tracker:1.0` = old single-stage (copies prebuilt jar); `habit-tracker:2.0` = multi-stage; `habit-tracker:3.0` = same Dockerfile, adds UI + new endpoints. Both show 470MB disk / 130MB content in `docker images`: same JRE base, so the gain is a reproducible build without needing a local JDK/Maven, plus non-root user and layer caching, not image size.
 - Smoke test of 2.0 on host port 8095: `/actuator/health` -> `{"status":"UP"}`, process runs as uid 999 (app). Test container removed.
 - Host ports in use: 8080 (other app), 8081 (Jenkins), 8082 (test container), 8090 (Ansible target), 8095 (temporary smoke test).
 
 ## Kubernetes
 - Cluster: Docker Desktop built-in single-node cluster; local images are visible, so `imagePullPolicy: IfNotPresent`, no registry.
-- Manifests in `k8s/`: `configmap.yaml` (`habit-tracker-config`, PORT "8080"), `deployment.yaml` (3 replicas, label `app: habit-tracker`, image `habit-tracker:2.0`, PORT via `configMapKeyRef`, requests 200m/256Mi, limits 500m/512Mi), `service.yaml` (`habit-tracker-service`, NodePort, 80 -> 8080, nodePort 30080).
+- Manifests in `k8s/`: `configmap.yaml` (`habit-tracker-config`, PORT "8080"), `deployment.yaml` (3 replicas, label `app: habit-tracker`, image `habit-tracker:3.0`, PORT via `configMapKeyRef`, requests 200m/256Mi, limits 500m/512Mi), `service.yaml` (`habit-tracker-service`, NodePort, 80 -> 8080, nodePort 30080, `sessionAffinity: ClientIP` since v3.0 because data is per pod).
 - Probes (enhancement): readiness `/actuator/health` initialDelay 20s period 5s; liveness same path initialDelay 40s period 10s failureThreshold 3.
 - `kubectl apply --dry-run=client -f k8s/` passed for all three. Not applied for real yet.
 - `k8s/README.md` lists the exact demo commands (apply, scale 5 and back to 3, describe, configmap, optional rollback demo).
@@ -71,3 +76,4 @@ Custom port: set `PORT` env var (e.g. PowerShell: `$env:PORT=9090`).
 - Session 3 (CI step DONE): branch `feature/ci-pipeline` (kept). Added Maven Wrapper 3.9.9, Jenkinsfile, GitHub Actions workflow, .gitattributes. Verified locally with `mvnw.cmd clean test` (3 tests pass) and `mvnw.cmd package -DskipTests` (jar built). Jenkins/GitHub Actions themselves not run here (YAML and Jenkinsfile reviewed by reading). Merged into main with `--no-ff`; nothing pushed. Next: user pushes, then manual Jenkins setup, Ansible, Docker, Kubernetes.
 - Session 4 (Docker + Kubernetes DONE): branch `feature/kubernetes` (kept). Committed the previously untracked single-stage Dockerfile and ansible/ first. Upgraded Dockerfile to multi-stage, added .dockerignore, built habit-tracker:2.0 and smoke tested on 8095. Added k8s/ manifests (dry-run validated only) and k8s/README.md. Merged into main with `--no-ff`; nothing pushed. Next: user applies manifests and takes screenshots, then report, repo_link.txt, resume lines.
 - Session 5 (Report DONE): branch `feature/report` (kept). Wrote report/component1.md, report/component2.md, report/resume.md and repo_link.txt from the actual files; no code, YAML or Jenkinsfile changed. Honest points stated: 1.0 and 2.0 images are the same size, scaling was manual (not autoscaling), habit data is per-pod in memory, readiness warnings during JVM startup are normal. Items to verify by hand: Ansible port 8090 (repo default is 8080, so it must have been overridden at run time), tool versions not recorded (Jenkins, Ansible, Docker Desktop, kubectl, Ubuntu), screenshot placeholders, figure descriptions match what was actually seen. Merged into main with `--no-ff`; nothing pushed.
+- Session 6 (UI + features): branch `feature/ui` (kept, not merged, not pushed). Habit now has category, createdAt, check-in dates; added check-in, delete, /info, static UI; k8s image 3.0 and sessionAffinity ClientIP. Pipeline files untouched. `mvnw.cmd clean package`: 10 tests pass; jar tested with Invoke-RestMethod/curl (create, check-in, list, delete 204/404, /info, / serves HTML, health UP). Docker build of 3.0 and 8095 smoke test NOT done: Docker daemon was not running; do it by hand: `docker build -t habit-tracker:3.0 .`.

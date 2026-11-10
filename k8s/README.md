@@ -1,6 +1,8 @@
 # Kubernetes deployment (Docker Desktop)
 
-Run from the repo root in PowerShell. Image `habit-tracker:2.0` must exist locally (`docker build -t habit-tracker:2.0 .`).
+Run from the repo root in PowerShell. Image `habit-tracker:3.0` must exist locally (`docker build -t habit-tracker:3.0 .`).
+
+The Service uses `sessionAffinity: ClientIP`: habit data is in memory per pod, so a client is pinned to one pod for a consistent UI (a shared database would be the real fix). Open `http://localhost:30080/` for the UI; the footer shows which pod served it.
 
 ## 1. Deploy
 

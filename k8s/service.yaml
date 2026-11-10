@@ -14,3 +14,6 @@ spec:
       port: 80          # cluster-internal service port
       targetPort: 8080  # container port
       nodePort: 30080   # external port (8080-8082 are taken on this machine)
+  # In-memory data lives per pod, so we pin a client to one pod for a consistent UI;
+  # a shared database would be the real fix.
+  sessionAffinity: ClientIP
