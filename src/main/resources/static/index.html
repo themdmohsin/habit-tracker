@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Habit Tracker</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, Arial, sans-serif; background: #f3f4f6; color: #1f2937; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { margin: 0 0 16px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  input { padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 1rem; }
+  #name { flex: 2 1 160px; }
+  #category { flex: 1 1 120px; }
+  button { padding: 10px 14px; border: 0; border-radius: 6px; font-size: .95rem; cursor: pointer; background: #2563eb; color: #fff; }
+  button:disabled { background: #16a34a; cursor: default; opacity: .85; }
+  button.del { background: #dc2626; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { background: #fff; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .name { flex: 1 1 140px; font-weight: 600; }
+  .badge { background: #e0e7ff; color: #3730a3; border-radius: 999px; padding: 2px 10px; font-size: .8rem; }
+  .streak { color: #b45309; font-weight: 600; white-space: nowrap; }
+  #error { background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 6px; margin-bottom: 12px; }
+  #empty { text-align: center; color: #6b7280; padding: 32px 0; }
+  [hidden] { display: none !important; }
+  footer { position: fixed; bottom: 0; left: 0; right: 0; text-align: center; padding: 10px; font-size: .85rem; color: #6b7280; background: #e5e7eb; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Habit Tracker</h1>
+  <div id="error" role="alert" hidden></div>
+  <form id="form">
+    <input id="name" placeholder="New habit (e.g. Read 20 minutes)" required>
+    <input id="category" placeholder="Category (optional)">
+    <button type="submit">Add</button>
+  </form>
+  <ul id="list"></ul>
+  <div id="empty" hidden>No habits yet. Add your first one above!</div>
+</main>
+<footer id="footer">Served by pod: ...</footer>
+<script>
+const list = document.getElementById('list');
+const empty = document.getElementById('empty');
+const errorBox = document.getElementById('error');
+
+function showError(msg) {
+  errorBox.textContent = msg;
+  errorBox.hidden = !msg;
+}
+
+async function api(url, options) {
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch (e) {
+    throw new Error('Cannot reach the server.');
+  }
+  if (!res.ok) throw new Error('Request failed (' + res.status + ').');
+  return res.status === 204 ? null : res.json();
+}
+
+async function run(action) {
+  try {
+    showError('');
+    await action();
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
+async function load() {
+  await run(async () => render(await api('habits')));
+}
+
+function render(habits) {
+  list.innerHTML = '';
+  empty.hidden = habits.length > 0;
+  for (const h of habits) {
+    const li = document.createElement('li');
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = h.name;
+
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = h.category;
+
+    const streak = document.createElement('span');
+    streak.className = 'streak';
+    streak.textContent = '\uD83D\uDD25 ' + h.streak + (h.streak === 1 ? ' day' : ' days');
+
+    const done = document.createElement('button');
+    done.textContent = h.doneToday ? '\u2713 Done' : 'Done today';
+    done.disabled = h.doneToday;
+    done.onclick = () => run(async () => {
+      await api('habits/' + h.id + '/check-in', { method: 'POST' });
+      await load();
+    });
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = 'Delete';
+    del.onclick = () => run(async () => {
+      await api('habits/' + h.id, { method: 'DELETE' });
+      await load();
+    });
+
+    li.append(name, badge, streak, done, del);
+    list.append(li);
+  }
+}
+
+document.getElementById('form').addEventListener('submit', e => {
+  e.preventDefault();
+  const name = document.getElementById('name');
+  const category = document.getElementById('category');
+  run(async () => {
+    await api('habits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.value, category: category.value })
+    });
+    name.value = '';
+    category.value = '';
+    await load();
+  });
+});
+
+fetch('info').then(r => r.json()).then(i => {
+  document.getElementById('footer').textContent = 'Served by pod: ' + i.pod + ' (v' + i.version + ')';
+}).catch(() => {
+  document.getElementById('footer').textContent = 'Served by pod: unknown';
+});
+
+load();
+</script>
+</body>
+</html>
