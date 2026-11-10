@@ -1,38 +1,47 @@
-Role Name
-=========
+habit_tracker
+=============
 
-A brief description of the role goes here.
+Installs Java and deploys the Habit Tracker Spring Boot jar as a systemd service under a dedicated system user.
 
 Requirements
 ------------
 
-Any pre-requisites that may not be covered by Ansible itself or the role should be mentioned here. For instance, if the role uses the EC2 module, it may be a good idea to mention in this section that the boto package is required.
+- Ubuntu/Debian target with systemd and sudo.
+- The jar built beforehand (`mvnw.cmd clean package`) at `target/habit-tracker.jar`.
 
 Role Variables
 --------------
 
-A description of the settable variables for this role should go here, including any variables that are in defaults/main.yml, vars/main.yml, and any variables that can/should be set via parameters to the role. Any variables that are read from other roles and/or the global scope (ie. hostvars, group vars, etc.) should be mentioned here as well.
+Defined in `defaults/main.yml`:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `app_name` | `habit-tracker` | systemd service name |
+| `app_port` | `8090` | Passed to the app as `PORT` |
+| `app_user` | `habit` | System user running the service |
+| `app_dir` | `/opt/habit-tracker` | Install directory |
+| `jar_src` | `{{ playbook_dir }}/../target/habit-tracker.jar` | Jar on the control machine |
+| `java_package` | `openjdk-17-jre-headless` | apt package |
 
 Dependencies
 ------------
 
-A list of other roles hosted on Galaxy should go here, plus any details in regards to parameters that may need to be set for other roles, or variables that are used from other roles.
+None.
 
 Example Playbook
 ----------------
 
-Including an example of how to use your role (for instance, with variables passed in as parameters) is always nice for users too:
-
-    - hosts: servers
+    - hosts: habit_tracker
+      become: true
       roles:
-         - { role: username.rolename, x: 42 }
+        - habit_tracker
 
 License
 -------
 
-BSD
+MIT
 
 Author Information
 ------------------
 
-An optional section for the role authors to include contact information, or a website (HTML is not allowed).
+themdmohsin
